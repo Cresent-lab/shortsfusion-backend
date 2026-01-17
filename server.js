@@ -475,7 +475,6 @@ async function assembleVideoWithFFmpeg(images, audioUrl, script) {
   // See SETUP_GUIDE.md for example
   return 'https://cdn.yoursite.com/video_123.mp4';
 }
-}
 // =============================================
 // VIDEO GENERATION ROUTES
 // =============================================
