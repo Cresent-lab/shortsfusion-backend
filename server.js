@@ -479,6 +479,16 @@ async function assembleVideoWithFFmpeg(images, audioUrl, script) {
 // VIDEO GENERATION ROUTES
 // =============================================
 app.use('/api/video', videoRoutes);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date(),
+    service: 'shortsfusion-backend'
+  });
+});
+
 // ============================================
 // START SERVER
 // ============================================
