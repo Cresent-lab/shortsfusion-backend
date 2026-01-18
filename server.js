@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 // const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const videoRoutes = require('./routes/video');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 // Video routes configured
@@ -479,6 +480,7 @@ async function assembleVideoWithFFmpeg(images, audioUrl, script) {
 // VIDEO GENERATION ROUTES
 // =============================================
 app.use('/api/video', videoRoutes);
+app.use('/api/auth', authRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
