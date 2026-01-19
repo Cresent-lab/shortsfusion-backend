@@ -189,7 +189,7 @@ router.get('/google/callback', async (req, res) => {
     );
 
     // Redirect to frontend with token
-    res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${token}`);
+    res.redirect(`${process.env.FRONTEND_URL}/?token=${token}`);
 
   } catch (error) {
     console.error('Google OAuth error:', error);
@@ -260,3 +260,4 @@ router.post('/google/mobile', async (req, res) => {
 });
 
 module.exports = router;
+Fix OAuth redirect to home page
