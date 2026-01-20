@@ -1,4 +1,4 @@
-js
+
 // force redeploy: ensure /api/auth/me is deployed
 const express = require('express');
 const router = express.Router();
