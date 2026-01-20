@@ -122,6 +122,29 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// GET /api/auth/me - Get current user info
+router.get('/me', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const result = await db.query('SELECT id, email, full_name, tokens_remaining, subscription_plan FROM users WHERE id = $1', [decoded.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
 // GET /api/auth/google - Initiate Google OAuth flow
 router.get('/google', (req, res) => {
   const authUrl = googleClient.generateAuthUrl({
