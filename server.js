@@ -14,7 +14,12 @@ const app = express();
 // Video routes configured
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ['https://shortsfusion-frontend.vercel.app', 'https://shortsfusion-frontend-h7m2921lf-shahbazs-projects-de4d64c7.vercel.app'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // Database connection
