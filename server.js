@@ -25,19 +25,21 @@ const allowedOrigins = process.env.CORS_ORIGIN
     ];
 
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  },
+// SIMPLE CORS FIX - Replace lines 17-22 in server.js with this:
+
+app.use(cors({
+  origin: [
+    'https://vidsora.io',
+    'https://www.vidsora.io',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://shortsfusion-frontend.vercel.app',
+    'https://shortsfusion-frontend-h7m29211f-shahbazs-projects-de4d64c7.vercel.app'
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
+}));
 }));
 
 // Handle preflight requests
