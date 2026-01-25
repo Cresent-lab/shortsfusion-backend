@@ -14,12 +14,41 @@ const app = express();
 // Video routes configured
 
 // Middleware
+// CORS Configuration - Updated for vidsora.io
+const allowedOrigins = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(',')
+  : [
+      'https://vidsora.io',
+      'https://www.vidsora.io',
+      'http://localhost:3000',
+      'http://localhost:5173'
+    ];
+
 app.use(cors({
-  origin: ['https://shortsfusion-frontend.vercel.app', 'https://shortsfusion-frontend-h7m2921lf-shahbazs-projects-de4d64c7.vercel.app'],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
+```
+
+---
+
+## 📝 **COMMIT MESSAGE:**
+```
+Fix CORS for vidsora.io domain
 app.use(express.json());
 
 // Database connection
