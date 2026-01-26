@@ -6,6 +6,8 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
+const VideoGenerator = require('./services/videoGenerator');
+const videoGenerator = new VideoGenerator();
 
 const app = express();
 
