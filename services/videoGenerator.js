@@ -473,11 +473,9 @@ Format as JSON:
  * ENTRY POINT FOR QUEUE WORKER
  * Worker should call ONLY this method
  */
-async function generateFromVideoRow(videoRow) {
-  const pipeline = new Pipeline({
-    ai: module.exports.ai || this.ai,
-    render: module.exports.render || this.render,
-  });
+async generateFromVideoRow(videoRow, { pool }) {
+  const Pipeline = require("./pipeline");
+  const pipeline = new Pipeline({ videoGenerator: this, pool });
 
   const { id, user_id, topic, style, duration } = videoRow;
 
