@@ -468,24 +468,22 @@ Format as JSON:
 
     return response.data.secure_url;
   }
-}
-/**
- * ENTRY POINT FOR QUEUE WORKER
- * Worker should call ONLY this method
- */
-async generateFromVideoRow(videoRow, { pool }) {
-  const Pipeline = require("./pipeline");
-  const pipeline = new Pipeline({ videoGenerator: this, pool });
 
-  const { id, user_id, topic, style, duration } = videoRow;
+  // ENTRY POINT FOR QUEUE WORKER
+  async generateFromVideoRow(videoRow, { pool }) {
+    const Pipeline = require("./pipeline");
+    const pipeline = new Pipeline({ videoGenerator: this, pool });
 
-  return pipeline.run({
-    videoId: id,
-    userId: user_id,
-    topic,
-    style,
-    duration: Number(duration) || 60,
-  });
+    const { id, user_id, topic, style, duration } = videoRow;
+
+    return pipeline.run({
+      videoId: id,
+      userId: user_id,
+      topic,
+      style,
+      duration: Number(duration) || 60,
+    });
+  }
 }
 
 module.exports = VideoGenerator;
