@@ -1,105 +1,66 @@
-// worker.js
-// ShortsFusion async video generation worker
-
+// worker.js — BullMQ Worker for ShortsFusion
 require("dotenv").config();
 
+const express = require("express");
+const { Pool } = require("pg");
 const { Worker } = require("bullmq");
 const IORedis = require("ioredis");
-const { Pool } = require("pg");
 
 const VideoGenerator = require("./services/videoGenerator");
 
-// --------------------
-// Redis connection
-// --------------------
-const redis = new IORedis(process.env.REDIS_URL, {
+// ---- ENV checks
+if (!process.env.DATABASE_URL) console.warn("⚠️ DATABASE_URL missing");
+if (!process.env.REDIS_URL) console.warn("⚠️ REDIS_URL missing");
+
+// ---- DB
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
+});
+
+// ---- Redis
+const connection = new IORedis(process.env.REDIS_URL, {
   maxRetriesPerRequest: null,
 });
 
-// --------------------
-// Database
-// --------------------
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
-
-// --------------------
-// Video generator
-// --------------------
+// ---- Video generator
 const videoGenerator = new VideoGenerator();
 
-// --------------------
-// Worker
-// --------------------
+// ---- Worker
 const worker = new Worker(
   "videoQueue",
   async (job) => {
-    const { videoId, userId } = job.data;
+    console.log(`🧵 Job received: ${job.name} (${job.id})`, job.data);
 
-    console.log("🎬 Processing job", {
-      jobId: job.id,
-      videoId,
-      userId,
-    });
+    const { videoId } = job.data;
+    if (!videoId) throw new Error("Missing videoId in job.data");
 
-    const client = await pool.connect();
+    // Load video row
+    const v = await pool.query("SELECT * FROM videos WHERE id=$1", [videoId]);
+    if (!v.rows.length) throw new Error(`Video not found: ${videoId}`);
 
-    try {
-      // Mark video as processing
-      await client.query(
-        "UPDATE videos SET status='processing' WHERE id=$1",
-        [videoId]
-      );
+    const videoRow = v.rows[0];
 
-      // Generate video (this is your heavy AI logic)
-      const result = await videoGenerator.generate(videoId, userId);
+    // Mark processing
+    await pool.query("UPDATE videos SET status='processing' WHERE id=$1", [videoId]);
 
-      // Save results
-      await client.query(
-        `
-        UPDATE videos
-        SET status='completed',
-            video_url=$2,
-            thumbnail_url=$3
-        WHERE id=$1
-        `,
-        [videoId, result.videoUrl, result.thumbnailUrl]
-      );
+    // Run generation (your service method)
+    await videoGenerator.generateFromVideoRow(videoRow, { pool });
 
-      console.log("✅ Video completed", videoId);
-
-      return { success: true };
-    } catch (err) {
-      console.error("❌ Worker error:", err);
-
-      await client.query(
-        "UPDATE videos SET status='failed' WHERE id=$1",
-        [videoId]
-      );
-
-      throw err;
-    } finally {
-      client.release();
-    }
+    console.log(`✅ Job complete: ${job.id} videoId=${videoId}`);
+    return { ok: true };
   },
-  {
-    connection: redis,
-    concurrency: 2,
-  }
+  { connection }
 );
 
-// --------------------
-// Lifecycle logs
-// --------------------
-worker.on("ready", () => {
-  console.log("🚀 Worker is ready and waiting for jobs");
-});
+worker.on("completed", (job) => console.log(`✅ completed ${job.id}`));
+worker.on("failed", (job, err) => console.error(`❌ failed ${job?.id}`, err));
 
-worker.on("failed", (job, err) => {
-  console.error(`❌ Job ${job.id} failed`, err);
-});
+// ---- Keepalive health server (important on Railway)
+const app = express();
+app.get("/health", (req, res) => res.json({ ok: true, service: "worker" }));
 
-worker.on("completed", (job) => {
-  console.log(`🎉 Job ${job.id} completed`);
-});
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`🩺 Worker health listening on ${PORT}`));
+
+console.log("👷 Worker started. Listening for jobs on queue: videoQueue");
