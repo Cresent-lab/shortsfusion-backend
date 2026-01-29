@@ -1,68 +1,39 @@
 // services/pipeline.js
-//
-// Pipeline orchestrates the full generation flow:
-// 1) script
-// 2) images
-// 3) voiceover
-// 4) render final video
-//
-// This file is intentionally structured so you can plug in your existing providers
-// (Claude/Stability/ElevenLabs/Cloudinary/Creatomate) without rewriting worker logic.
-
 class Pipeline {
-  constructor({ ai, render }) {
-    // ai: your AI layer (script/images/voice/storage)
-    // render: your rendering layer (Creatomate)
-    this.ai = ai;
-    this.render = render;
+  constructor({ videoGenerator, pool }) {
+    this.videoGenerator = videoGenerator;
+    this.pool = pool;
   }
 
-  /**
-   * Run full pipeline. Returns urls + artifacts.
-   * @param {object} input
-   * @param {string} input.videoId
-   * @param {string} input.userId
-   * @param {string} input.topic
-   * @param {string} input.style
-   * @param {number} input.duration
-   */
   async run({ videoId, userId, topic, style, duration }) {
-    // 1) Script
-    const script = await this.ai.generateScript({ topic, style, duration });
+    // This is the "orchestrator". Replace method names as needed.
 
-    // 2) Images (one per scene)
-    // Expecting script.scenes = [{ prompt, ...}, ...]
-    const images = await this.ai.generateImages({
-      scenes: script.scenes,
-      style,
-      videoId,
-      userId,
-    });
+    // 1) Generate script
+    const script = await this.videoGenerator.generateScript(topic, duration);
+
+    // 2) Images
+    const images = await this.videoGenerator.generateImages(script, style);
 
     // 3) Voiceover
-    const voice = await this.ai.generateVoiceover({
-      scriptText: script.voiceoverText ?? script.text ?? "",
-      videoId,
-      userId,
-    });
+    const voiceUrl = await this.videoGenerator.generateVoiceover(script);
 
-    // 4) Render final video
-    const rendered = await this.render.renderVideo({
-      videoId,
-      topic,
-      duration,
+    // 4) Render video
+    const videoUrl = await this.videoGenerator.renderVideo({
+      script,
       images,
-      voiceoverUrl: voice.voiceoverUrl,
-      script,
+      voiceUrl,
+      duration,
     });
 
-    return {
-      script,
-      images, // [{ sceneIndex, imageUrl, ... }]
-      voiceoverUrl: voice.voiceoverUrl,
-      videoUrl: rendered.videoUrl,
-      thumbnailUrl: rendered.thumbnailUrl ?? null,
-    };
+    // 5) Persist results
+    await this.pool.query(
+      `UPDATE videos
+       SET status='completed', script=$2, video_url=$3, thumbnail_url=$4
+       WHERE id=$1`,
+      [videoId, JSON.stringify(script), videoUrl, images?.[0] || null]
+    );
+
+    return { videoUrl };
   }
 }
 
