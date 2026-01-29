@@ -4,6 +4,8 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const axios = require('axios');
 const FormData = require('form-data');
+const Pipeline = require("./pipeline");
+
 
 class VideoGenerator {
   constructor() {
@@ -466,6 +468,26 @@ Format as JSON:
 
     return response.data.secure_url;
   }
+}
+/**
+ * ENTRY POINT FOR QUEUE WORKER
+ * Worker should call ONLY this method
+ */
+async function generateFromVideoRow(videoRow) {
+  const pipeline = new Pipeline({
+    ai: module.exports.ai || this.ai,
+    render: module.exports.render || this.render,
+  });
+
+  const { id, user_id, topic, style, duration } = videoRow;
+
+  return pipeline.run({
+    videoId: id,
+    userId: user_id,
+    topic,
+    style,
+    duration: Number(duration) || 60,
+  });
 }
 
 module.exports = VideoGenerator;
