@@ -1,122 +1,119 @@
 const express = require('express');
 const router = express.Router();
+const { videoQueue } = require("../queue");
+
 
 module.exports = (pool, authenticateToken, videoGenerator) => {
   
   // ============================================
   // VIDEO GENERATION ROUTE
   // ============================================
-  router.post('/generate', authenticateToken, async (req, res) => {
-    try {
-      const { topic, visualStyle, duration } = req.body;
-      const userId = req.user.id;
+router.post("/generate", authenticateToken, async (req, res) => {
+  const { topic, visualStyle, duration } = req.body;
+  const userId = req.user.id;
 
-      // Validate inputs
-      if (!topic || !visualStyle || !duration) {
-        return res.status(400).json({ error: 'Missing required fields' });
-      }
+  if (!topic || !visualStyle || !duration) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
 
-      // Calculate token cost
-      const styleCosts = {
-        cinematic: 5,
-        animated: 5,
-        realistic: 5,
-        minimal: 3
-      };
+  const styleCosts = { cinematic: 5, animated: 5, realistic: 5, minimal: 3 };
+  const durationCosts = { 30: 3, 60: 5, 90: 7 };
 
-      const durationCosts = {
-        30: 3,
-        60: 5,
-        90: 7
-      };
+  const totalCost =
+    (styleCosts[visualStyle] || 0) +
+    (durationCosts[Number(duration)] || 0);
 
-      const totalCost = styleCosts[visualStyle] + durationCosts[duration];
+  if (!totalCost) {
+    return res.status(400).json({ error: "Invalid visualStyle or duration" });
+  }
 
-      // Check user's token balance
-      const userResult = await pool.query(
-        'SELECT tokens FROM users WHERE id = $1',
-        [userId]
-      );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-      if (userResult.rows.length === 0) {
-        return res.status(404).json({ error: 'User not found' });
-      }
+    // Lock user row to prevent double-spend
+    const u = await client.query(
+      "SELECT tokens FROM users WHERE id=$1 FOR UPDATE",
+      [userId]
+    );
 
-      const userTokens = userResult.rows[0].tokens;
+    if (!u.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "User not found" });
+    }
 
-      if (userTokens < totalCost) {
-        return res.status(400).json({ 
-          error: 'Insufficient tokens',
-          required: totalCost,
-          available: userTokens
-        });
-      }
-
-      // Deduct tokens
-      await pool.query(
-        'UPDATE users SET tokens = tokens - $1 WHERE id = $2',
-        [totalCost, userId]
-      );
-
-      // Generate video (this takes 2-3 minutes)
-      console.log(`🎬 Starting video generation for user ${userId}`);
-      
-      const videoData = await videoGenerator.generateVideo(topic, visualStyle, duration);
-
-      // Save video to database
-      const videoResult = await pool.query(
-        `INSERT INTO videos (user_id, topic, visual_style, duration, video_url, status, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, NOW()) 
-         RETURNING *`,
-        [userId, topic, visualStyle, duration, videoData.videoUrl, 'completed']
-      );
-
-      const video = videoResult.rows[0];
-
-      // Get updated user token balance
-      const updatedUser = await pool.query(
-        'SELECT tokens FROM users WHERE id = $1',
-        [userId]
-      );
-
-      res.json({
-        video: {
-          id: video.id,
-          topic: video.topic,
-          visualStyle: video.visual_style,
-          duration: video.duration,
-          videoUrl: video.video_url,
-          createdAt: video.created_at
-        },
-        tokensUsed: totalCost,
-        tokensRemaining: updatedUser.rows[0].tokens
-      });
-
-    } catch (error) {
-      console.error('Video generation error:', error);
-      
-      // Refund tokens on error
-      try {
-        const { visualStyle, duration } = req.body;
-        const styleCosts = { cinematic: 5, animated: 5, realistic: 5, minimal: 3 };
-        const durationCosts = { 30: 3, 60: 5, 90: 7 };
-        const totalCost = styleCosts[visualStyle] + durationCosts[duration];
-
-        await pool.query(
-          'UPDATE users SET tokens = tokens + $1 WHERE id = $2',
-          [totalCost, req.user.id]
-        );
-        console.log(`Refunded ${totalCost} tokens to user ${req.user.id}`);
-      } catch (refundError) {
-        console.error('Failed to refund tokens:', refundError);
-      }
-
-      res.status(500).json({ 
-        error: 'Video generation failed',
-        message: error.message 
+    const tokens = u.rows[0].tokens ?? 0;
+    if (tokens < totalCost) {
+      await client.query("ROLLBACK");
+      return res.status(402).json({
+        error: "Insufficient tokens",
+        required: totalCost,
+        available: tokens,
       });
     }
-  });
+
+    // Create video row immediately
+
+const v = await client.query(
+  `INSERT INTO videos (user_id, topic, style, status)
+   VALUES ($1, $2, $3, 'queued')
+   RETURNING *;`,
+  [userId, topic, visualStyle]
+);
+
+
+    const video = v.rows[0];
+
+    // Deduct tokens
+    await client.query(
+      "UPDATE users SET tokens=tokens-$1 WHERE id=$2",
+      [totalCost, userId]
+    );
+
+    // Token ledger (idempotent)
+    await client.query(
+      `INSERT INTO token_ledger (user_id, delta, reason, video_id, idempotency_key)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
+      [userId, -totalCost, "GENERATE_VIDEO", video.id, `gen:${userId}:${video.id}`]
+    );
+
+    await client.query("COMMIT");
+
+    // Enqueue job AFTER commit
+    await videoQueue.add(
+      "generate_video",
+      {
+        type: "generate_video",
+        videoId: video.id,
+        userId,
+        topic,
+        visualStyle,
+        duration: Number(duration),
+      },
+      { attempts: 3, backoff: { type: "exponential", delay: 8000 } }
+    );
+
+    return res.json({
+      video: {
+        id: video.id,
+        topic: video.topic,
+        visualStyle: video.visual_style,
+        duration: video.duration,
+        status: video.status,
+        createdAt: video.created_at,
+      },
+      tokensUsed: totalCost,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Generate enqueue error:", err);
+    return res.status(500).json({ error: "Failed to enqueue generation" });
+  } finally {
+    client.release();
+  }
+});
+
 
   // ============================================
   // GET USER'S VIDEOS
