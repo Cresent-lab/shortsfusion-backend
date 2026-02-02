@@ -1,103 +1,89 @@
-// routes/auth.js
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const { OAuth2Client } = require("google-auth-library");
+const passport = require("passport");
 
-/**
- * Auth routes factory (expects a pg Pool).
- * Mounted in server.js like:
- *   const authRoutes = require("./routes/auth");
- *   app.use("/api/auth", authRoutes(pool));
- */
-module.exports = function authRoutes(pool) {
+function makeAuthRouter(pool) {
   const router = express.Router();
 
-  const googleClientId = process.env.GOOGLE_CLIENT_ID;
-  const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
+  // Start OAuth
+  router.get(
+    "/google",
+    passport.authenticate("google", {
+      scope: ["profile", "email"],
+      session: false
+    })
+  );
 
-  router.get("/health", (_req, res) => res.json({ ok: true }));
+  // OAuth callback
+  router.get(
+    "/google/callback",
+    passport.authenticate("google", {
+      session: false,
+      failureRedirect: `${process.env.FRONTEND_URL}/?error=google_auth_failed`
+    }),
+    async (req, res) => {
+      // passport puts user profile in req.user
+      const profile = req.user;
 
-  /**
-   * POST /api/auth/google
-   *
-   * Accepts either:
-   *  A) { credential: "<google_id_token_jwt>" }   (recommended)
-   *  B) { email, name, googleId, picture }        (fallback)
-   */
-  router.post("/google", async (req, res) => {
+      const googleId = profile?.id || null;
+      const email = profile?.emails?.[0]?.value || null;
+      const name = profile?.displayName || null;
+
+      if (!googleId || !email) {
+        return res.redirect(`${process.env.FRONTEND_URL}/?error=missing_google_profile`);
+      }
+
+      try {
+        // Upsert user
+        const upsertSql = `
+          INSERT INTO users (google_id, email, name, tokens)
+          VALUES ($1, $2, $3, COALESCE($4, 0))
+          ON CONFLICT (email)
+          DO UPDATE SET google_id = EXCLUDED.google_id, name = EXCLUDED.name
+          RETURNING id, email, name, tokens;
+        `;
+
+        const result = await pool.query(upsertSql, [googleId, email, name, 0]);
+        const user = result.rows[0];
+
+        const token = jwt.sign(
+          { userId: user.id, email: user.email },
+          process.env.JWT_SECRET,
+          { expiresIn: "7d" }
+        );
+
+        // Redirect back to frontend with token
+        return res.redirect(`${process.env.FRONTEND_URL}/?token=${encodeURIComponent(token)}`);
+      } catch (err) {
+        console.error("Auth callback error:", err);
+        return res.redirect(`${process.env.FRONTEND_URL}/?error=server_auth_error`);
+      }
+    }
+  );
+
+  // Who am I
+  router.get("/me", async (req, res) => {
+    const hdr = req.headers.authorization || "";
+    const token = hdr.startsWith("Bearer ") ? hdr.slice("Bearer ".length) : null;
+
+    if (!token) return res.status(401).json({ error: "Missing Bearer token" });
+
     try {
-      if (!process.env.JWT_SECRET) {
-        return res.status(500).json({ error: "JWT_SECRET is not set" });
-      }
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
 
-      let email, name, picture, googleId;
-
-      const body = req.body || {};
-
-      // A) Preferred: verify Google ID token (credential)
-      if (body.credential) {
-        if (!googleClient) {
-          return res
-            .status(500)
-            .json({ error: "GOOGLE_CLIENT_ID is not set on backend" });
-        }
-
-        const ticket = await googleClient.verifyIdToken({
-          idToken: body.credential,
-          audience: googleClientId,
-        });
-
-        const payload = ticket.getPayload() || {};
-        email = payload.email;
-        name = payload.name || payload.given_name || null;
-        picture = payload.picture || null;
-        googleId = payload.sub || null; // Google user id
-      } else {
-        // B) Fallback: accept explicit fields
-        email = body.email;
-        name = body.name || null;
-        picture = body.picture || null;
-        googleId = body.googleId || null;
-      }
-
-      if (!email) {
-        return res.status(400).json({
-          error: "email is required",
-          hint:
-            "Frontend likely needs to send { credential } (Google ID token) OR { email, name, googleId, picture }",
-        });
-      }
-
-      // Upsert user by email
-      // NOTE: requires UNIQUE(email) on users table.
-      const upsert = await pool.query(
-        `
-        INSERT INTO users (email, plan, videos_created, videos_limit, created_at, google_id, profile_picture, last_login)
-        VALUES ($1, 'free', 0, 3, NOW(), $2, $3, NOW())
-        ON CONFLICT (email)
-        DO UPDATE SET
-          google_id = COALESCE(EXCLUDED.google_id, users.google_id),
-          profile_picture = COALESCE(EXCLUDED.profile_picture, users.profile_picture),
-          last_login = NOW()
-        RETURNING id, email, plan, videos_created, videos_limit, tokens, google_id, profile_picture, created_at, last_login
-        `,
-        [email, googleId, picture]
+      const r = await pool.query(
+        "SELECT id, email, name, tokens, created_at FROM users WHERE id = $1",
+        [payload.userId]
       );
 
-      const user = upsert.rows[0];
-
-      const token = jwt.sign(
-        { userId: user.id, email: user.email },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-
-      return res.json({ token, user });
+      if (!r.rows[0]) return res.status(401).json({ error: "User not found" });
+      return res.json({ user: r.rows[0] });
     } catch (err) {
-      console.error("POST /api/auth/google error:", err);
-      return res.status(500).json({ error: "Auth failed" });
+      return res.status(401).json({ error: "Invalid token" });
     }
   });
 
   return router;
-};
+}
+
+module.exports = { makeAuthRouter };
