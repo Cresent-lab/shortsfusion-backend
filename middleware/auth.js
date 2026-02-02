@@ -1,26 +1,18 @@
-const jwt = require('jsonwebtoken');
+const jwt = require("jsonwebtoken");
 
-// Middleware to verify JWT token
-const auth = async (req, res, next) => {
+function requireAuth(req, res, next) {
+  const hdr = req.headers.authorization || "";
+  const token = hdr.startsWith("Bearer ") ? hdr.slice("Bearer ".length) : null;
+
+  if (!token) return res.status(401).json({ error: "Missing Bearer token" });
+
   try {
-    // Get token from header
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-
-    if (!token) {
-      return res.status(401).json({ error: 'No token, authorization denied' });
-    }
-
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // Add user from payload
-    req.user = decoded.user;
-    
-    next();
-  } catch (error) {
-    console.error('Auth middleware error:', error.message);
-    res.status(401).json({ error: 'Token is not valid' });
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = payload; // { userId, email }
+    return next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid token" });
   }
-};
+}
 
-module.exports = auth;
+module.exports = { requireAuth };
